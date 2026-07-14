@@ -12,7 +12,7 @@ env:
   ECR_REPO_FRONTEND: eft-frontend
   ECS_CLUSTER: eft-cluster
   ECS_SERVICE_BACKEND: eft-backend-db-task-service-kuzo6q1h   # <-- confirma que este nombre sea exacto en tu consola ECS
-  ECS_SERVICE_FRONTEND: frontend-service
+  ECS_SERVICE_FRONTEND: eft-frontend-task-service-n33x7563
   BACKEND_ALB_URL: http://eft-backend-alb-1487321706.us-east-1.elb.amazonaws.com
 
 jobs:
