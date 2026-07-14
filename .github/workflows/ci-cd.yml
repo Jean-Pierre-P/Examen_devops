@@ -1,0 +1,125 @@
+name: CI/CD Pipeline
+
+# Se ejecuta en cada push a main y también se puede disparar manualmente
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1                 # TODO: ajustar a tu región AWS
+  ECR_REPO_BACKEND: eft-backend         # TODO: nombre de tu repo ECR para el backend
+  ECR_REPO_FRONTEND: eft-frontend       # TODO: nombre de tu repo ECR para el frontend
+  ECS_CLUSTER: eft-cluster              # TODO: nombre de tu clúster ECS
+  ECS_SERVICE_BACKEND: backend-service  # TODO: nombre del servicio ECS del backend
+  ECS_SERVICE_FRONTEND: frontend-service # TODO: nombre del servicio ECS del frontend
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) BUILD + TEST — no depende de AWS, corre siempre.
+  # ---------------------------------------------------------------
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar y testear backend
+        working-directory: ./backend
+        run: |
+          npm ci
+          npm test
+
+      - name: Instalar y compilar frontend
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+  # ---------------------------------------------------------------
+  # 2) BUILD & PUSH de imágenes a Amazon ECR
+  #    Requiere secretos de AWS configurados en:
+  #    Settings > Secrets and variables > Actions
+  #      - AWS_ACCESS_KEY_ID
+  #      - AWS_SECRET_ACCESS_KEY
+  # ---------------------------------------------------------------
+  build-and-push:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Definir tag de la imagen (trazabilidad)
+        id: vars
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login en Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build y push imagen backend
+        working-directory: ./backend
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          docker build -t "$REGISTRY/${{ env.ECR_REPO_BACKEND }}:$TAG" .
+          docker tag "$REGISTRY/${{ env.ECR_REPO_BACKEND }}:$TAG" "$REGISTRY/${{ env.ECR_REPO_BACKEND }}:latest"
+          docker push "$REGISTRY/${{ env.ECR_REPO_BACKEND }}:$TAG"
+          docker push "$REGISTRY/${{ env.ECR_REPO_BACKEND }}:latest"
+
+      - name: Build y push imagen frontend
+        working-directory: ./frontend
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          docker build -t "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG" .
+          docker tag "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG" "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:latest"
+          docker push "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG"
+          docker push "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:latest"
+
+  # ---------------------------------------------------------------
+  # 3) DEPLOY — fuerza a ECS a redesplegar con la imagen recién publicada.
+  #    Requiere que ya existan el clúster, los servicios y las task
+  #    definitions en AWS (esto lo configuras tú desde la consola/CLI).
+  # ---------------------------------------------------------------
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Forzar nuevo despliegue en ECS (backend)
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE_BACKEND }} \
+            --force-new-deployment
+
+      - name: Forzar nuevo despliegue en ECS (frontend)
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE_FRONTEND }} \
+            --force-new-deployment
