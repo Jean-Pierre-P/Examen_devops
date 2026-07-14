@@ -7,12 +7,13 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1                 # TODO: ajustar a tu región AWS
-  ECR_REPO_BACKEND: eft-backend         # TODO: nombre de tu repo ECR para el backend
-  ECR_REPO_FRONTEND: eft-frontend       # TODO: nombre de tu repo ECR para el frontend
-  ECS_CLUSTER: eft-cluster              # TODO: nombre de tu clúster ECS
-  ECS_SERVICE_BACKEND: backend-service  # TODO: nombre del servicio ECS del backend
-  ECS_SERVICE_FRONTEND: frontend-service # TODO: nombre del servicio ECS del frontend
+  AWS_REGION: us-east-1
+  ECR_REPO_BACKEND: eft-backend
+  ECR_REPO_FRONTEND: eft-frontend
+  ECS_CLUSTER: eft-cluster
+  ECS_SERVICE_BACKEND: eft-backend-db-task-service-kuzo6q1h   # <-- confirma que este nombre sea exacto en tu consola ECS
+  ECS_SERVICE_FRONTEND: frontend-service
+  BACKEND_ALB_URL: http://eft-backend-alb-1487321706.us-east-1.elb.amazonaws.com
 
 jobs:
   # ---------------------------------------------------------------
@@ -47,6 +48,7 @@ jobs:
   #    Settings > Secrets and variables > Actions
   #      - AWS_ACCESS_KEY_ID
   #      - AWS_SECRET_ACCESS_KEY
+  #      - AWS_SESSION_TOKEN   (obligatorio en AWS Academy: credenciales temporales)
   # ---------------------------------------------------------------
   build-and-push:
     needs: build-and-test
@@ -66,6 +68,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login en Amazon ECR
@@ -89,7 +92,8 @@ jobs:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           TAG: ${{ steps.vars.outputs.tag }}
         run: |
-          docker build -t "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG" .
+          docker build --build-arg VITE_API_URL=${{ env.BACKEND_ALB_URL }} \
+            -t "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG" .
           docker tag "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG" "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:latest"
           docker push "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:$TAG"
           docker push "$REGISTRY/${{ env.ECR_REPO_FRONTEND }}:latest"
@@ -108,6 +112,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Forzar nuevo despliegue en ECS (backend)
